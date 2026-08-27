@@ -135,7 +135,7 @@
     border-radius:16px; padding:12px 10px 12px 4px;
     transition: top .32s cubic-bezier(.34,1.4,.64,1), box-shadow .22s, background .22s, transform .18s;
     will-change: top, transform;
-    touch-action: pan-y;
+    touch-action: none;
     -webkit-touch-callout: none;
   }
   .card.dragging{
@@ -299,6 +299,36 @@
   let uid = 0;
   const cardEls = new Map(); // id -> element
   const GAP = 8;
+
+  // ---------------- SCROLL MANUALE DELLA LISTA (con inerzia) ----------------
+  // Le card hanno touch-action:none, quindi lo scroll nativo del browser è
+  // completamente disattivato su di esse: siamo noi a muovere listWrap.scrollTop
+  // a mano. Questo elimina ogni ambiguità/competizione con il drag, che invece
+  // funzionava in modo incoerente tra Safari e l'app aggiunta alla Home.
+  let momentumRAF = null;
+  function stopMomentum(){
+    if(momentumRAF){ cancelAnimationFrame(momentumRAF); momentumRAF = null; }
+  }
+  function startMomentum(initialVelocity){ // px per ms, segno = direzione del dito
+    stopMomentum();
+    let velocity = initialVelocity;
+    let lastTime = performance.now();
+    function step(now){
+      const dt = Math.min(now - lastTime, 32);
+      lastTime = now;
+      velocity *= Math.pow(0.94, dt / 16.67);
+      listWrap.scrollTop -= velocity * dt;
+      const max = listWrap.scrollHeight - listWrap.clientHeight;
+      if(listWrap.scrollTop <= 0 || listWrap.scrollTop >= max){
+        listWrap.scrollTop = Math.max(0, Math.min(listWrap.scrollTop, max));
+        momentumRAF = null;
+        return;
+      }
+      if(Math.abs(velocity) < 0.02){ momentumRAF = null; return; }
+      momentumRAF = requestAnimationFrame(step);
+    }
+    momentumRAF = requestAnimationFrame(step);
+  }
 
   // --- "Add to home screen" hint (only Safari iOS, not already standalone) ---
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
@@ -506,43 +536,46 @@
 
   // ---------------- DRAG (da qualsiasi punto della card, con pressione prolungata) ----------------
   // La card mostra solo testo (non modificabile): un tocco fermo per ~230ms
-  // "afferra" la card e inizia il trascinamento, esattamente come il riordino
-  // delle app in Reminders/Home su iOS. Un movimento prima di quel momento
-  // viene lasciato allo scroll nativo della lista.
+  // "afferra" la card e blocca lo scroll della lista, così puoi spostarla
+  // liberamente. Un movimento prima di quel momento viene interpretato come
+  // scroll della lista, gestito interamente a mano (vedi sopra) — niente più
+  // scroll nativo del browser da cui "riprendersi" il controllo, quindi
+  // nessuna differenza di comportamento tra Safari e app aggiunta alla Home.
   const LONG_PRESS_MS = 230;
-  const MOVE_CANCEL_PX = 9;
+  const MOVE_CANCEL_PX = 8;
 
   function attachDrag(card, txt, it){
     let longPressTimer = null;
     let dragging = false;
-    let aborted = false;
+    let scrolling = false;
     let pointerId = null;
-    let startClientX = 0, startClientY = 0, startTop = 0;
-    let lastDx = 0, lastDy = 0;
+    let startClientY = 0, startTop = 0, startScrollTop = 0;
+    let lastDy = 0;
+    let lastSampleT = 0, lastSampleY = 0, velocity = 0;
 
     card.addEventListener('pointerdown', (e)=>{
       if(e.target.closest('.actions')) return; // il tasto elimina resta indipendente
       if(e.pointerType === 'mouse' && e.button !== 0) return;
 
+      stopMomentum();
+
       pointerId = e.pointerId;
-      startClientX = e.clientX;
       startClientY = e.clientY;
       startTop = parseFloat(card.style.top) || 0;
+      startScrollTop = listWrap.scrollTop;
       dragging = false;
-      aborted = false;
-      lastDx = 0;
+      scrolling = false;
       lastDy = 0;
+      lastSampleT = performance.now();
+      lastSampleY = e.clientY;
+      velocity = 0;
 
       const beginDrag = ()=>{
         // Ricontrolliamo la posizione reale del dito proprio ora, invece di
         // fidarci solo del fatto che onMove non abbia ancora annullato il
-        // timer: su alcuni dispositivi (es. app aggiunta alla Home su iOS)
-        // il timer può scattare prima che l'evento di movimento sia stato
-        // consegnato, creando una finestra di corsa (race condition) in cui
-        // un semplice scroll veniva scambiato per un drag. Così è impossibile.
-        if(aborted || Math.abs(lastDx) > MOVE_CANCEL_PX || Math.abs(lastDy) > MOVE_CANCEL_PX){
-          return;
-        }
+        // timer: elimina ogni finestra di corsa (race condition) tra timer
+        // ed evento di movimento.
+        if(scrolling || Math.abs(lastDy) > MOVE_CANCEL_PX) return;
         dragging = true;
         try{ card.setPointerCapture(pointerId); }catch(err){}
         card.classList.add('dragging');
@@ -554,38 +587,46 @@
 
       const onMove = (ev)=>{
         if(ev.pointerId !== pointerId) return;
-        const dx = ev.clientX - startClientX;
         const dy = ev.clientY - startClientY;
-        lastDx = dx;
         lastDy = dy;
 
-        if(!dragging){
-          // movimento deciso prima che scatti la pressione prolungata: è uno
-          // scroll, non un drag -> annulliamo il tentativo e lasciamo fare
-          // al browser (scroll nativo), senza mai chiamare preventDefault.
-          if(Math.abs(dx) > MOVE_CANCEL_PX || Math.abs(dy) > MOVE_CANCEL_PX){
-            aborted = true;
-            clearTimeout(longPressTimer);
-            cleanup();
+        if(dragging){
+          // --- TRASCINAMENTO: la lista resta ferma, si muove solo la card ---
+          ev.preventDefault();
+          let newTop = startTop + dy;
+          newTop = Math.max(0, Math.min(newTop, listEl.offsetHeight - getHeight(card)));
+          card.style.top = newTop + 'px';
+
+          const curIdx = items.findIndex(x=>x.id===it.id);
+          const cardCenter = newTop + getHeight(card)/2;
+          const targetIdx = computeTargetIndex(it.id, cardCenter);
+
+          if(targetIdx !== curIdx){
+            const [movedItem] = items.splice(curIdx, 1);
+            items.splice(targetIdx, 0, movedItem);
+            layout(true, it.id);
+            items.forEach((x,i)=>{ const e2 = cardEls.get(x.id); if(e2){ const ie = e2.querySelector('.idx'); if(ie) ie.textContent = i+1; } });
           }
           return;
         }
 
-        ev.preventDefault();
-        let newTop = startTop + dy;
-        newTop = Math.max(0, Math.min(newTop, listEl.offsetHeight - getHeight(card)));
-        card.style.top = newTop + 'px';
-
-        const curIdx = items.findIndex(x=>x.id===it.id);
-        const cardCenter = newTop + getHeight(card)/2;
-        const targetIdx = computeTargetIndex(it.id, cardCenter);
-
-        if(targetIdx !== curIdx){
-          const [movedItem] = items.splice(curIdx, 1);
-          items.splice(targetIdx, 0, movedItem);
-          layout(true, it.id);
-          items.forEach((x,i)=>{ const e2 = cardEls.get(x.id); if(e2){ const ie = e2.querySelector('.idx'); if(ie) ie.textContent = i+1; } });
+        if(!scrolling){
+          if(Math.abs(dy) <= MOVE_CANCEL_PX) return; // fermo: aspettiamo il long-press
+          // movimento deciso prima che scatti la pressione prolungata -> è
+          // uno scroll della lista, non un drag.
+          scrolling = true;
+          clearTimeout(longPressTimer);
         }
+
+        // --- SCROLL MANUALE: la card resta ferma, si muove la lista ---
+        ev.preventDefault();
+        listWrap.scrollTop = startScrollTop - dy;
+
+        const now = performance.now();
+        const dt = now - lastSampleT;
+        if(dt > 0){ velocity = (ev.clientY - lastSampleY) / dt; }
+        lastSampleT = now;
+        lastSampleY = ev.clientY;
       };
 
       const onUp = (ev)=>{
@@ -596,8 +637,11 @@
           card.classList.remove('dragging');
           card.style.transition = 'top .32s cubic-bezier(.34,1.4,.64,1), box-shadow .22s, background .22s, transform .18s';
           layout(true);
+        } else if(scrolling && Math.abs(velocity) > 0.03){
+          startMomentum(velocity);
         }
         dragging = false;
+        scrolling = false;
         cleanup();
       };
 
