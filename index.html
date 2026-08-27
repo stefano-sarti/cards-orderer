@@ -596,6 +596,7 @@
     let startClientY = 0, startTop = 0, startScrollTop = 0;
     let lastDy = 0;
     let lastSampleT = 0, lastSampleY = 0, velocity = 0;
+    let startOffsetInCard = 0;
 
     card.addEventListener('pointerdown', (e)=>{
       if(e.target.closest('.actions')) return; // il tasto elimina resta indipendente
@@ -607,6 +608,9 @@
       startClientY = e.clientY;
       startTop = parseFloat(card.style.top) || 0;
       startScrollTop = listWrap.scrollTop;
+      const wrapRect = listWrap.getBoundingClientRect();
+      const pointerInListAtStart = (e.clientY - wrapRect.top) + listWrap.scrollTop;
+      startOffsetInCard = pointerInListAtStart - startTop;
       dragging = false;
       scrolling = false;
       lastDy = 0;
@@ -640,7 +644,9 @@
           ev.preventDefault();
         
           const recomputeTop = () => {
-            let t = startTop + dy - autoScrollAccum;
+            const wrapRect = listWrap.getBoundingClientRect();
+            const pointerInList = (ev.clientY - wrapRect.top) + listWrap.scrollTop;
+            let t = pointerInList - startOffsetInCard;
             t = Math.max(0, Math.min(t, listEl.offsetHeight - getHeight(card)));
             card.style.top = t + 'px';
             return t;
