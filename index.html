@@ -300,6 +300,50 @@
   const cardEls = new Map(); // id -> element
   const GAP = 8;
 
+  const AUTOSCROLL_EDGE = 60;       // px dal bordo entro cui parte lo scroll
+  const AUTOSCROLL_MAX_SPEED = 12;  // px per frame al massimo (velocità di scroll)
+  let autoScrollRAF = null;
+  let autoScrollSpeed = 0;
+  let autoScrollAccum = 0;          // quanto ha scrollato la lista durante il drag corrente
+  
+  function stopAutoScroll(){
+    if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
+    autoScrollSpeed = 0;
+  }
+  
+  function autoScrollStep(onScrolled){
+    if (autoScrollSpeed === 0) { autoScrollRAF = null; return; }
+    const max = listWrap.scrollHeight - listWrap.clientHeight;
+    const prev = listWrap.scrollTop;
+    const next = Math.max(0, Math.min(prev + autoScrollSpeed, max));
+    if (next !== prev) {
+      listWrap.scrollTop = next;
+      autoScrollAccum += (next - prev);
+      onScrolled();
+    }
+    autoScrollRAF = requestAnimationFrame(() => autoScrollStep(onScrolled));
+  }
+  
+  function updateAutoScroll(clientY, onScrolled){
+    const rect = listWrap.getBoundingClientRect();
+    const distTop = clientY - rect.top;
+    const distBottom = rect.bottom - clientY;
+  
+    if (distTop < AUTOSCROLL_EDGE) {
+      const ratio = Math.max(0, (AUTOSCROLL_EDGE - distTop) / AUTOSCROLL_EDGE);
+      autoScrollSpeed = -ratio * AUTOSCROLL_MAX_SPEED;
+    } else if (distBottom < AUTOSCROLL_EDGE) {
+      const ratio = Math.max(0, (AUTOSCROLL_EDGE - distBottom) / AUTOSCROLL_EDGE);
+      autoScrollSpeed = ratio * AUTOSCROLL_MAX_SPEED;
+    } else {
+      autoScrollSpeed = 0;
+    }
+  
+    if (autoScrollSpeed !== 0 && !autoScrollRAF) {
+      autoScrollRAF = requestAnimationFrame(() => autoScrollStep(onScrolled));
+    }
+  }
+
   // ---------------- SCROLL MANUALE DELLA LISTA (con inerzia) ----------------
   // Le card hanno touch-action:none, quindi lo scroll nativo del browser è
   // completamente disattivato su di esse: siamo noi a muovere listWrap.scrollTop
@@ -575,9 +619,10 @@
         // fidarci solo del fatto che onMove non abbia ancora annullato il
         // timer: elimina ogni finestra di corsa (race condition) tra timer
         // ed evento di movimento.
-        if(scrolling || Math.abs(lastDy) > MOVE_CANCEL_PX) return;
+        if (scrolling || Math.abs(lastDy) > MOVE_CANCEL_PX) return;
         dragging = true;
-        try{ card.setPointerCapture(pointerId); }catch(err){}
+        autoScrollAccum = 0;   // <-- RIGA AGGIUNTA
+        try { card.setPointerCapture(pointerId); } catch(err) {}
         card.classList.add('dragging');
         card.style.transition = 'box-shadow .22s, background .22s, transform .18s';
         if(navigator.vibrate) navigator.vibrate(8);
@@ -590,22 +635,31 @@
         const dy = ev.clientY - startClientY;
         lastDy = dy;
 
-        if(dragging){
-          // --- TRASCINAMENTO: la lista resta ferma, si muove solo la card ---
+        if (dragging) {
+          // --- TRASCINAMENTO: la card segue il dito, la lista si auto-scrolla ai bordi ---
           ev.preventDefault();
-          let newTop = startTop + dy;
-          newTop = Math.max(0, Math.min(newTop, listEl.offsetHeight - getHeight(card)));
-          card.style.top = newTop + 'px';
-
-          const curIdx = items.findIndex(x=>x.id===it.id);
-          const cardCenter = newTop + getHeight(card)/2;
+        
+          const recomputeTop = () => {
+            let t = startTop + dy + autoScrollAccum;
+            t = Math.max(0, Math.min(t, listEl.offsetHeight - getHeight(card)));
+            card.style.top = t + 'px';
+            return t;
+          };
+        
+          let newTop = recomputeTop();
+          updateAutoScroll(ev.clientY, () => { newTop = recomputeTop(); });
+        
+          const curIdx = items.findIndex(x => x.id === it.id);
+          const cardCenter = newTop + getHeight(card) / 2;
           const targetIdx = computeTargetIndex(it.id, cardCenter);
-
-          if(targetIdx !== curIdx){
+          if (targetIdx !== curIdx) {
             const [movedItem] = items.splice(curIdx, 1);
             items.splice(targetIdx, 0, movedItem);
             layout(true, it.id);
-            items.forEach((x,i)=>{ const e2 = cardEls.get(x.id); if(e2){ const ie = e2.querySelector('.idx'); if(ie) ie.textContent = i+1; } });
+            items.forEach((x, i) => {
+              const e2 = cardEls.get(x.id);
+              if (e2) { const ie = e2.querySelector('.idx'); if (ie) ie.textContent = i + 1; }
+            });
           }
           return;
         }
@@ -632,6 +686,7 @@
       const onUp = (ev)=>{
         if(ev.pointerId !== pointerId) return;
         clearTimeout(longPressTimer);
+        stopAutoScroll();
         if(dragging){
           try{ card.releasePointerCapture(pointerId); }catch(err){}
           card.classList.remove('dragging');
