@@ -515,8 +515,10 @@
   function attachDrag(card, txt, it){
     let longPressTimer = null;
     let dragging = false;
+    let aborted = false;
     let pointerId = null;
     let startClientX = 0, startClientY = 0, startTop = 0;
+    let lastDx = 0, lastDy = 0;
 
     card.addEventListener('pointerdown', (e)=>{
       if(e.target.closest('.actions')) return; // il tasto elimina resta indipendente
@@ -527,8 +529,20 @@
       startClientY = e.clientY;
       startTop = parseFloat(card.style.top) || 0;
       dragging = false;
+      aborted = false;
+      lastDx = 0;
+      lastDy = 0;
 
       const beginDrag = ()=>{
+        // Ricontrolliamo la posizione reale del dito proprio ora, invece di
+        // fidarci solo del fatto che onMove non abbia ancora annullato il
+        // timer: su alcuni dispositivi (es. app aggiunta alla Home su iOS)
+        // il timer può scattare prima che l'evento di movimento sia stato
+        // consegnato, creando una finestra di corsa (race condition) in cui
+        // un semplice scroll veniva scambiato per un drag. Così è impossibile.
+        if(aborted || Math.abs(lastDx) > MOVE_CANCEL_PX || Math.abs(lastDy) > MOVE_CANCEL_PX){
+          return;
+        }
         dragging = true;
         try{ card.setPointerCapture(pointerId); }catch(err){}
         card.classList.add('dragging');
@@ -542,12 +556,15 @@
         if(ev.pointerId !== pointerId) return;
         const dx = ev.clientX - startClientX;
         const dy = ev.clientY - startClientY;
+        lastDx = dx;
+        lastDy = dy;
 
         if(!dragging){
           // movimento deciso prima che scatti la pressione prolungata: è uno
           // scroll, non un drag -> annulliamo il tentativo e lasciamo fare
-          // al browser (scroll nativo).
+          // al browser (scroll nativo), senza mai chiamare preventDefault.
           if(Math.abs(dx) > MOVE_CANCEL_PX || Math.abs(dy) > MOVE_CANCEL_PX){
+            aborted = true;
             clearTimeout(longPressTimer);
             cleanup();
           }
