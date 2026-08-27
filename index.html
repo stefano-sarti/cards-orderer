@@ -640,7 +640,7 @@
           ev.preventDefault();
         
           const recomputeTop = () => {
-            let t = startTop + dy + autoScrollAccum;
+            let t = startTop + dy - autoScrollAccum;
             t = Math.max(0, Math.min(t, listEl.offsetHeight - getHeight(card)));
             card.style.top = t + 'px';
             return t;
