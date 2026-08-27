@@ -33,6 +33,16 @@
     --radius: 20px;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html, body, button, h1, h2, p, span, div{
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  textarea, input{
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
   html,body{
     margin:0; padding:0; height:100%;
     background-color: var(--bg);
@@ -297,6 +307,22 @@
     a2hs.classList.add('show');
   }
   a2hsClose.addEventListener('click', ()=> a2hs.classList.remove('show'));
+
+  // Rete di sicurezza extra: blocca selezione testo e menu contestuale
+  // ovunque tranne che nella textarea, indipendentemente dal CSS.
+  // Questo evita che il "tieni premuto" per trascinare le card apra
+  // il popup di selezione/copia di iOS, che altrimenti manda in conflitto
+  // il riconoscimento del drag.
+  document.addEventListener('selectstart', (e)=>{
+    const tag = e.target.tagName;
+    if(tag === 'TEXTAREA' || tag === 'INPUT') return;
+    e.preventDefault();
+  });
+  document.addEventListener('contextmenu', (e)=>{
+    const tag = e.target.tagName;
+    if(tag === 'TEXTAREA' || tag === 'INPUT') return;
+    e.preventDefault();
+  });
 
   function toast(msg){
     toastEl.textContent = msg;
