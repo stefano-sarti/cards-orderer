@@ -125,9 +125,13 @@
   .primary-btn:disabled{ opacity:0.3; }
 
   /* ---------- LISTA ---------- */
-  #listWrap{ flex:1; overflow-y:auto; padding: 4px 14px 24px; -webkit-overflow-scrolling:touch; }
+  #listWrap{
+    flex:1; overflow-y:auto; padding: 4px 14px 24px;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-y: contain;
+  }
   #list{ position:relative; }
-
+  
   .card{
     position:absolute; left:0; right:0;
     display:flex; align-items:flex-start; gap:2px;
@@ -135,7 +139,7 @@
     border-radius:16px; padding:12px 10px 12px 4px;
     transition: top .32s cubic-bezier(.34,1.4,.64,1), box-shadow .22s, background .22s, transform .18s;
     will-change: top, transform;
-    touch-action: none;
+    touch-action: pan-y;
     -webkit-touch-callout: none;
   }
   .card.dragging{
@@ -144,6 +148,7 @@
     box-shadow: 0 16px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(56,189,248,0.25);
     transition: box-shadow .22s, background .22s;
     transform: scale(1.025);
+    touch-action: none;
     z-index:10;
   }
   .idx{
